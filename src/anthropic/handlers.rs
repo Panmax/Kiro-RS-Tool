@@ -44,8 +44,15 @@ fn normalize_web_search_tool(payload: &mut MessagesRequest) {
     if let Some(tools) = payload.tools.as_mut() {
         for tool in tools {
             if tool.name == "WebSearch" {
+                // 只有 schema 是 Claude Code 的 `{ query: string }` 形态时才补 type，
+                // 让它走本地 WebSearch；否则只改名，别把客户端自定义的同名工具带进搜索循环。
+                let cc_query_shape = tool
+                    .input_schema
+                    .get("properties")
+                    .and_then(|p| p.get("query"))
+                    .is_some_and(|q| q.get("type").and_then(|v| v.as_str()) == Some("string"));
                 tool.name = "web_search".to_string();
-                if tool.tool_type.is_none() {
+                if tool.tool_type.is_none() && cc_query_shape {
                     tool.tool_type = Some("web_search_20250305".to_string());
                 }
             }
@@ -1943,6 +1950,43 @@ fn create_buffered_sse_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 只有 Claude Code 的 `{ query: string }` 形态才补 `type` 走原生 WebSearch；
+    /// 客户端自定义 schema（例：queries 数组）只改名，不补 type。
+    #[test]
+    fn normalize_web_search_tool_only_synthesizes_type_for_claude_code_schema() {
+        let mut payload: MessagesRequest = serde_json::from_str(
+            r#"{
+            "model": "claude-sonnet-5-5",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {
+                    "name": "WebSearch",
+                    "description": "claude code shape",
+                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
+                },
+                {
+                    "name": "WebSearch",
+                    "description": "client shape",
+                    "input_schema": {"type": "object", "properties": {"queries": {"type": "array", "items": {"type": "string"}}}, "required": ["queries"]}
+                }
+            ]
+        }"#,
+        )
+        .expect("payload");
+
+        normalize_web_search_tool(&mut payload);
+
+        let tools = payload.tools.expect("tools");
+        assert_eq!(tools[0].name, "web_search");
+        assert_eq!(tools[0].tool_type.as_deref(), Some("web_search_20250305"));
+        assert_eq!(tools[1].name, "web_search");
+        assert!(
+            tools[1].tool_type.is_none(),
+            "客户端自定义 schema 的同名工具不应被补 type"
+        );
+    }
 
     #[test]
     fn bedrock_client_validation_errors_map_to_400() {
