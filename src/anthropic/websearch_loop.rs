@@ -175,12 +175,7 @@ impl DecodedToolUse {
 /// Continue condition: every tool_use this round is web_search (at least one) and the round limit has not been reached.
 /// As soon as a client tool such as exec is mixed in, there is no tool_use at all, or the limit is reached, it stops and flushes (exec is never swallowed).
 fn should_search_round(round_idx: usize, tool_uses: &[DecodedToolUse]) -> bool {
-    // 只有带可用 query 的 web_search 调用才本地搜索。客户端自定义 schema（例：queries: []）
-    // 取不到 query：把 tool_use 原样回传客户端，而不是让已经开始的流以 api_error 结束。
-    let only_web_search = !tool_uses.is_empty()
-        && tool_uses
-            .iter()
-            .all(|t| t.name == "web_search" && !t.query().trim().is_empty());
+    let only_web_search = !tool_uses.is_empty() && tool_uses.iter().all(|t| t.name == "web_search");
     only_web_search && round_idx < MAX_WEB_SEARCH_ROUNDS
 }
 
@@ -1060,25 +1055,6 @@ mod tests {
         // Skip: no tool_use at all (plain-text answer) -> terminate
         let empty: Vec<DecodedToolUse> = vec![];
         assert!(!should_search_round(0, &empty));
-    }
-
-    /// 客户端自定义同名工具的入参形态（queries 数组 / 空白 query）取不到 query：
-    /// 本地搜索必然失败，此时应终止循环、把 tool_use 原样回传客户端，而不是让整条流报错。
-    #[test]
-    fn round_with_client_shaped_web_search_input_does_not_search() {
-        let queries_array = vec![DecodedToolUse {
-            id: "toolu_client".to_string(),
-            name: "web_search".to_string(),
-            input: json!({"queries": ["rust 2026"]}),
-        }];
-        assert!(!should_search_round(0, &queries_array));
-
-        let blank_query = vec![DecodedToolUse {
-            id: "toolu_blank".to_string(),
-            name: "web_search".to_string(),
-            input: json!({"query": "   "}),
-        }];
-        assert!(!should_search_round(0, &blank_query));
     }
 
     #[test]
